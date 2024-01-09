@@ -78,7 +78,7 @@ def combine_leakage(d_name, combif, n_coeff=KYBER_N_2, wing="right", f_decs=None
     elif combif in ["prod", "norm_prod"]:
         combined_L = np.ones((total_N, n_coeff))
 
-    lh.n_files = 10 if wing=="right" else 50
+    lh.n_files = 10 if wing=="right" else 40
 
     m_decs = "HW" if model is HW else "ID"
     lh.n_files = n_files_og if model is HW else lh.n_files
@@ -87,7 +87,7 @@ def combine_leakage(d_name, combif, n_coeff=KYBER_N_2, wing="right", f_decs=None
         lh.get_snr_on_share(i, coeff_list=coeff_list, n_chunks=n_chunks, f_des=f"{coeff_list[0]}_{coeff_list[-1]}", add_noise=0, model=model)
         lh.get_PoI_on_share(i, coeff_list, n_chunks, n_poi=1, f_des=f"{coeff_list[0]}_{coeff_list[-1]}", add_noise=0, display=False, model=model)
 
-    lh.n_files = 50
+    lh.n_files = n_files_og
 
     for fi in trange(lh.n_files, desc="GETDATA-FILE|"):
         for share_i in range(lh.n_shares):
@@ -139,21 +139,26 @@ def run_onM(n_profiling, noise, n_shares, combif, n_coeff=128, model=ID):
     # 3 shares
     if n_shares ==2:
         d1 = "021123_1335"
-        d2 = "021123_1506"
+        d2 = "021123_1335"
+        # d2 = "021123_1506"
     elif n_shares==3:
         d1 = "221123_2119"
-        d2 = "221123_2328"
+        d2 = "221123_2119"
+        # d2 = "221123_2328"
 
     elif n_shares==4:
         # 4 shares
         d1 = "231123_0138"
-        d2 = "231123_0431"
+        d2 = "231123_0138"
+        # d2 = "231123_0431"
     elif n_shares==5:
         d1 = "231123_1239"
-        d2 = "231123_0903"
+        d2 = "231123_1239"
+        # d2 = "231123_0903"
     elif n_shares==6:
         d1 = "060124_2112"
-        d2 = "070124_1718"
+        d2 = "060124_2112"
+        # d2 = "070124_1718"
 
 
     L1 = combine_leakage(d1, combif, n_coeff=128, wing=wing, f_decs=f"{wing}wing", add_noise=noise, model=model)
@@ -202,10 +207,10 @@ def run_onM(n_profiling, noise, n_shares, combif, n_coeff=128, model=ID):
     labels_profiling[range(n_profiling//2, n_profiling)] = 1
 
     same_c = np.nonzero(S1==S2)[0]
-    # print(S1[same_c])
-    # print(S2[same_c])
+
     # print(len(same_c))
     # L_profiling = L_profiling[:, same_c].copy()
+    print("to projection", L_profiling.shape)
 
 
 
@@ -345,7 +350,7 @@ def run_onM(n_profiling, noise, n_shares, combif, n_coeff=128, model=ID):
 
     plt.legend(fontsize=14)
     plt.title(f"{lh1.n_shares} share {combif} {wing} wing noise {noise}")
-    plt.savefig(f"pic/LDA_projection_{wing}wing_{lh1.n_shares}shares_{combif}_noise_{noise}_{n_profiling}_{m_decs}_{n_coeff}_fulllwing.png", bbox_inches='tight')
+    plt.savefig(f"pic/LDA_projection_{wing}wing_{lh1.n_shares}shares_{combif}_noise_{noise}_{n_profiling}_{m_decs}_{n_coeff}_fullwing.png", bbox_inches='tight')
     # plt.show()
     return mus
 
@@ -497,6 +502,9 @@ if __name__=="__main__":
 
     noise = 0
     combifs = ["sum", "prod", "norm_prod"]
+    # for combif in combifs:
+    #     run_onM(n_profiling=40000, noise=noise, n_shares=5, combif=combif, model=ID)
+    #     run_onM(n_profiling=40000, noise=noise, n_shares=6, combif=combif, model=ID)
     # run_onM(n_profiling=40000, noise=500, n_shares=2, n_coeff=128, combif="sum", model=ID)
     # run_onM(n_profiling=40000, noise=0, n_shares=2, n_coeff=32, combif="sum", model=ID)
 
@@ -526,11 +534,11 @@ if __name__=="__main__":
     # run_onM(n_profiling=100000, noise=1000, n_shares=2, combif=combif, model=ID)
     # run_onM(n_profiling=100000, noise=2000, n_shares=2, combif=combif, model=ID)
     for combif in combifs:
-    #     run_onM(n_profiling=40000, noise=noise, n_shares=2, combif=combif, model=ID)
-        run_onM(n_profiling=40000, noise=noise, n_shares=3, combif=combif, model=ID)
-        run_onM(n_profiling=40000, noise=noise, n_shares=4, combif=combif, model=ID)
-    #     run_onM(n_profiling=40000, noise=noise, n_shares=5, combif=combif, model=ID)
-    #     run_onM(n_profiling=40000, noise=noise, n_shares=6, combif=combif, model=ID)
+        # run_onM(n_profiling=30000, noise=noise, n_shares=2, combif=combif, model=ID)
+        # run_onM(n_profiling=30000, noise=noise, n_shares=3, combif=combif, model=ID)
+        # run_onM(n_profiling=30000, noise=noise, n_shares=4, combif=combif, model=ID)
+        run_onM(n_profiling=30000, noise=noise, n_shares=5, combif=combif, model=ID)
+        run_onM(n_profiling=30000, noise=noise, n_shares=6, combif=combif, model=ID)
         # run_onM(n_profiling=40000, noise=500, n_shares=6, combif=combif, model=ID)
         # run_onM(n_profiling=40000, noise=1000, n_shares=6, combif=combif, model=ID)
         # run_onM(n_profiling=20000, noise=noise, n_shares=5, combif=combif, model=ID)
