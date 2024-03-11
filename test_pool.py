@@ -1,5 +1,6 @@
 import time
 import numpy as np
+import torch
 
 
 from multiprocessing import Pool, Manager, Value, Array, Process
@@ -73,25 +74,28 @@ def FUN(XXYY):
 
 # protect the entry point
 if __name__ == '__main__':
-    start = time.time()
-
-    X1 = np.arange(1, 200001, dtype=np.uint32)
-    Y1 = np.arange(1, 200001, dtype=np.uint32)
-    # X2 = np.arange(536870913, 1073741824, dtype=np.uint32)
-    # Y2 = np.arange(536870913, 1073741824, dtype=np.uint32)
-    # X3 = np.arange(1073741825, 1610612736, dtype=np.uint32)
-    # Y3 = np.arange(1073741825, 1610612736, dtype=np.uint32)
-    XY1 = np.array([X1, Y1])
-    print(XY1.shape)
-    # XY2 = np.array([X2, Y2])
-    # XY3 = np.array([X3, Y3])
-    # X = np.hstack((X1, X2))
-    # Y = np.hstack((Y1, Y2))
-
-    XXYY1 = np.split(XY1, 10, axis=1)
-    # XXYY2 = [XY1, XY2, XY3]
-    # XXYY3 = [XY1, XY2, XY3]
-    FUN(XXYY1)
+    target = torch.ones([10, 64], dtype=torch.float32)  # 64 classes, batch size = 10
+    output = torch.full([10, 64], 1.5)  # A prediction (logit)
+    print(target)
+    # start = time.time()
+    #
+    # X1 = np.arange(1, 200001, dtype=np.uint32)
+    # Y1 = np.arange(1, 200001, dtype=np.uint32)
+    # # X2 = np.arange(536870913, 1073741824, dtype=np.uint32)
+    # # Y2 = np.arange(536870913, 1073741824, dtype=np.uint32)
+    # # X3 = np.arange(1073741825, 1610612736, dtype=np.uint32)
+    # # Y3 = np.arange(1073741825, 1610612736, dtype=np.uint32)
+    # XY1 = np.array([X1, Y1])
+    # print(XY1.shape)
+    # # XY2 = np.array([X2, Y2])
+    # # XY3 = np.array([X3, Y3])
+    # # X = np.hstack((X1, X2))
+    # # Y = np.hstack((Y1, Y2))
+    #
+    # XXYY1 = np.split(XY1, 10, axis=1)
+    # # XXYY2 = [XY1, XY2, XY3]
+    # # XXYY3 = [XY1, XY2, XY3]
+    # FUN(XXYY1)
     # C = [[XXYY1], [XXYY1]]
 
     # pool = NoDaemonProcessPool(len(C))
@@ -140,5 +144,7 @@ if __name__ == '__main__':
     #     B2 = result2.get()
     #     #print(B1)
     #     print(np.min(B2))
-    elapsed = (time.time() - start)
-    print("\n", "time elapsed is :", elapsed)
+    # elapsed = (time.time() - start)
+    # print("\n", "time elapsed is :", elapsed)
+    #
+    # poi_255 = [162795, 162796, 163389, 162771, 163373, 163390, 163400, 163170, 163388, 163382]

@@ -3,7 +3,7 @@ from matplotlib import pyplot as plt
 from tqdm.auto import tqdm, trange
 import pickle
 from scalib.modeling import LDAClassifier as lda
-from scalib.metrics import SNR
+from scalib.metrics import SNR, Ttest
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from helpers import *
 # from discriminant_analysis_ import LinearDiscriminantAnalysis as lda
@@ -189,7 +189,35 @@ def noise_signal_correlation(dname):
     # plt.legend()
     # plt.show()
 
-# def TTEST(d1, d2):
+def TTEST(d1, d2):
+    lh1 = Leakage_Handler(d1)
+    lh2 = Leakage_Handler(d2)
+    nf = 10
+    c_len = lh1.n_samples*lh1.n_shares
+    ttest = Ttest(c_len, d=3)
+    for fi in trange(nf, desc="GETDATA FILE|"):
+        for share_i in range(lh1.n_shares):
+            f_t = f"{lh1.file_path}_traces_{fi}_share_{share_i}.npy"
+            traces = np.load(f_t).astype(np.int16)
+            fulltraces = traces.copy() if share_i==0 else np.append(fulltraces, traces, axis=1)
+        L = fulltraces.copy()
+        for share_i in range(lh1.n_shares):
+            f_t = f"{lh2.file_path}_traces_{fi}_share_{share_i}.npy"
+            traces = np.load(f_t).astype(np.int16)
+            fulltraces = traces.copy() if share_i==0 else np.append(fulltraces, traces, axis=1)
+        L = np.append(L, fulltraces, axis=0)
+        labels = np.ones(len(L), dtype=np.uint16)
+        labels[len(L)//2:] = 0
+        ttest.fit_u(L, labels)
+    t = ttest.get_ttest()
+    for i in range(3):
+        plt.plot(np.arange(lh1.n_samples), t[i][:lh1.n_samples])
+    plt.show()
+    for i in range(3):
+        plt.plot(np.arange(lh1.n_samples), t[i][lh1.n_samples:])
+    plt.show()
+
+
 def get_data(lh):
     DATA = {}
     TRACES = {}
@@ -253,7 +281,8 @@ def traces_check():
     noise_signal_correlation(D_3[0])
 
 if __name__ == '__main__':
-    traces_check()
+    TTEST(D_2[0], D_2[1])
+    # traces_check()
     # data_sanity_check("221123_2102")
 
 

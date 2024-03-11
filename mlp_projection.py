@@ -1,138 +1,17 @@
+import pytorch_lightning as pl
+from lightning.pytorch import loggers as pl_loggers
 import pickle
+import torch
+from torch import nn, optim
 import numpy as np
 from matplotlib import pyplot as plt
 from tqdm.auto import tqdm, trange
-from scalib.modeling import LDAClassifier as lda
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
-from scipy import linalg
+
 import math
 from helpers import *
-from LDA_func import *
+from mlp_arch import *
 
 
-
-
-def share_dist_inspect(d_name, c, share_i, n_coeff=KYBER_N_2):
-    lh = Leakage_Handler(d_name)
-    n_files_og = lh.n_files
-    total_N = lh.poly_per_file*lh.n_files
-    right_wing = np.arange(KYBER_N_2, KYBER_N)
-    lh.n_files = 10
-    n_chunks = 16
-    lh.get_snr_on_share(share_i, coeff_list=right_wing, n_chunks=n_chunks, f_des=f"{right_wing[0]}_{right_wing[-1]}", add_noise=0)
-    lh.get_PoI_on_share(share_i, right_wing, n_chunks, n_poi=1, f_des=f"{right_wing[0]}_{right_wing[-1]}", add_noise=0, display=False)
-    for fi in trange(lh.n_files, desc="GETDATA-FILE|"):
-        f_d = f"{lh.file_path}_meta_{fi}.npy"
-        data = np.load(f_d, allow_pickle=True)
-        data = data.item().get(f"share_{share_i}")[:, right_wing]
-        pt = np.where(data==c)
-        f_t = f"{lh.file_path}_traces_{fi}_share_{share_i}.npy"
-        traces = np.load(f_t)
-        poi =  lh.poi[f"share_{share_i}"]
-        poi = poi.astype(np.uint32)
-        poi_c = poi[pt[1]].squeeze()
-        # selected = np.column_stack((pt[0], poi_c))
-
-        # print(selected.shape)
-        # print(selected)
-        Lc = traces[pt[0], poi_c]
-        if fi==0:
-            L = Lc.copy()
-        else:
-            L = np.append(L, Lc)
-
-    print(L.shape, L.mean())
-    p0, x0 = np.histogram(L, bins=100, density=True)
-    plt.plot(x0[:-1], p0, label=f"class0 s={c}", alpha=0.75)
-    plt.legend()
-    plt.show()
-
-def combine_leakage(d_name, combif, n_coeff=KYBER_N_2, n_poi=1, wing="right", decs=None, add_noise=False, model=ID):
-    m_desc="HW" if model is HW else "ID"
-    f_n = f"log/combined_L_{d_name}_{combif}_{n_coeff}_{n_poi}_{decs}_noise_{add_noise}_{m_desc}.npy"
-    lh = Leakage_Handler(d_name)
-    if os.path.exists(f"{f_n}"):
-        print_centered(f"COMBINED LEAKAGE FOR {d_name} {lh.n_shares} {combif} {n_coeff} COEFFS {n_poi} POIs {wing} wing(s) noise {add_noise} {m_desc} EXISTED")
-        with open(f_n, "rb") as f:
-            combined_L = np.load(f)
-        print_centered(f"COMBINED LEAKAGE FOR {d_name} {lh.n_shares} {combif} {n_coeff} COEFFS {n_poi} POIs {wing} wing(s) noise {add_noise} {m_desc} LOADED")
-        return combined_L
-    print_centered(f"GENERATE COMBINED LEAKAGE FOR {d_name} {lh.n_shares} {combif} {n_coeff} COEFFS {n_poi} POIs {wing} wing(s) noise {add_noise} {m_desc}")
-    n_files_og = lh.n_files
-
-
-    n_chunks = n_coeff//8
-    if wing=="left":
-        coeff_list = np.arange(0, KYBER_N_2)
-        coeff_list = coeff_list[:n_coeff]
-    elif wing=="right":
-        coeff_list = np.arange(KYBER_N_2, KYBER_N)
-        coeff_list = coeff_list[:n_coeff]
-    elif wing=="both":
-        coeff_list = np.arange(KYBER_N)
-        n_coeff = 256
-        n_chunks = 32
-    total_N = lh.poly_per_file*n_files_og
-    print( lh.poly_per_file, total_N)
-
-    lh.n_files = 40
-
-    lh.n_files = n_files_og if model is HW else lh.n_files
-    for i in range(lh.n_shares):
-        print_centered(f"====SNR SHARE {i+1}====")
-        lh.get_snr_on_share(i, coeff_list=coeff_list, n_chunks=n_chunks, f_des=f"for_attack", add_noise=0, model=model)
-        lh.get_PoI_on_share(i, coeff_list, n_chunks, n_poi=n_poi, f_des=f"for_attack", add_noise=0, display=False, model=model)
-
-    lh.n_files = n_files_og
-    if combif=="norm_prod":
-        temp = np.zeros((lh.n_shares, total_N, len(coeff_list)*n_poi))
-    if combif in ["abs_diff", "sum"]:
-        combined_L = np.zeros((total_N, len(coeff_list)*n_poi), dtype=np.int64)
-    elif combif in ["prod", "norm_prod"]:
-        combined_L = np.ones((total_N, len(coeff_list)*n_poi), dtype=np.float64)
-
-    for fi in trange(lh.n_files, desc="GETDATA-FILE|"):
-        for share_i in range(lh.n_shares):
-            f_t = f"{lh.file_path}_traces_{fi}_share_{share_i}.npy"
-
-            traces = np.load(f_t)
-            poi =  lh.poi[f"share_{share_i}"]
-            poi = poi.astype(np.uint32)
-            # print(f"share {share_i}", poi.shape)
-            Li = traces[:, poi.flatten()].copy()
-            if add_noise:
-                Li = Li + np.random.normal(0, add_noise, size=Li.shape)
-                # Li = Li.astype(np.int16)
-            # print(lh.poly_per_file*fi, lh.poly_per_file*fi+lh.poly_per_file)
-            if combif=="abs_diff":
-                combined_L[lh.poly_per_file*fi:lh.poly_per_file*fi+lh.poly_per_file] =  Li.copy() - combined_L[lh.poly_per_file*fi:lh.poly_per_file*fi+lh.poly_per_file]
-            elif combif=="sum":
-                combined_L[lh.poly_per_file*fi:lh.poly_per_file*fi+lh.poly_per_file] =  Li.copy() + combined_L[lh.poly_per_file*fi:lh.poly_per_file*fi+lh.poly_per_file]
-            elif combif=="prod":
-                combined_L[lh.poly_per_file*fi:lh.poly_per_file*fi+lh.poly_per_file] = combined_L[lh.poly_per_file*fi:lh.poly_per_file*fi+lh.poly_per_file]*(Li.copy()/100)
-            elif combif=="norm_prod":
-                temp[share_i, np.arange(lh.poly_per_file*fi, lh.poly_per_file*fi+lh.poly_per_file)] = Li.copy()
-
-
-    if combif=="norm_prod":
-        for ni in range(lh.n_shares):
-            Li= temp[ni].copy()
-            print("norm_prod process", Li.shape, (Li.mean(axis=0)).shape)
-            Li = Li -  Li.mean(axis=0)
-            print(Li.mean(axis=0))
-            # print( Li.mean(axis=0))
-            # print(Li.shape, combined_L.shape)
-            combined_L = combined_L*Li
-        # combined_L*=1000
-
-
-    if combif=="abs_diff":
-        with open(f_n, "wb") as f:
-            np.save(f, np.abs(combined_L))
-        return np.abs(combined_L)
-    with open(f_n, "wb") as f:
-        np.save(f, combined_L)
-    return combined_L
 def combine_leakage_full(d_name, combif, n_poi=1, f_desc=None, add_noise=False, model=ID):
     m_desc="HW" if model is HW else "ID"
     f_n = f"log/combined_L_{d_name}_{combif}_{n_poi}_noise_{add_noise}_{m_desc}_fullp.npy"
@@ -142,7 +21,7 @@ def combine_leakage_full(d_name, combif, n_poi=1, f_desc=None, add_noise=False, 
         with open(f_n, "rb") as f:
             combined_L = np.load(f)
         print_centered(f"COMBINED LEAKAGE FOR {d_name} {lh.n_shares} {combif} FULL COEFFS {n_poi} POIs noise {add_noise} {m_desc} LOADED")
-        return combined_L
+        return combined_L.astype(np.float32)
     print_centered(f"GENERATE COMBINED LEAKAGE FOR {d_name} {lh.n_shares} {combif} FULL COEFFS {n_poi} POIs noise {add_noise} {m_desc}")
 
     n_files_og = lh.n_files
@@ -150,9 +29,9 @@ def combine_leakage_full(d_name, combif, n_poi=1, f_desc=None, add_noise=False, 
     if combif=="norm_prod":
         temp = np.zeros((lh.n_shares, total_N, KYBER_N*n_poi))
     if combif in ["abs_diff", "sum"]:
-        combined_L = np.zeros((total_N, KYBER_N*n_poi), dtype=np.int64)
+        combined_L = np.zeros((total_N, KYBER_N*n_poi), dtype=np.float32)
     elif combif in ["prod", "norm_prod"]:
-        combined_L = np.ones((total_N, KYBER_N*n_poi), dtype=np.float64)
+        combined_L = np.ones((total_N, KYBER_N*n_poi), dtype=np.float32)
     POI = {}
     for share_i in range(lh.n_shares):
         poi_file = f"{lh.dir_path}/POI_on_share_{n_poi}_poi_{share_i}_ID_{f_desc}_noise_{add_noise}_fullp.npy"
@@ -214,7 +93,8 @@ def classify_(d1, d2, L1, L2, n_profiling):
 
     lh2 = Leakage_Handler(d2)
 
-    labels_profiling = np.zeros(n_profiling, dtype=np.uint16)
+    labels_profiling = np.zeros(n_profiling, dtype=np.int8)
+    print("OG size", L1.shape)
     idx_L1 = np.random.choice(len(L1), n_profiling//2, replace=False)
     idx_L2 = np.random.choice(len(L2), n_profiling//2, replace=False)
     L_profiling = L1[idx_L1].copy()
@@ -227,75 +107,98 @@ def classify_(d1, d2, L1, L2, n_profiling):
 
 
     idx_a_L1 = np.setdiff1d(np.arange(len(L1)), idx_L1)
+    print(len(idx_a_L1), len(idx_a_L1))
     idx_a_L2 = np.setdiff1d(np.arange(len(L2)), idx_L2)
     L_attack = L1[idx_a_L1].copy()
     L_attack = np.append(L_attack, L2[idx_a_L2].copy(), axis=0)
-    print(np.any(idx_L1==idx_a_L1))
-    print(np.any(idx_L2==idx_a_L2))
-    labels_attack = np.zeros(len(L_attack))
+
+    labels_attack = np.zeros(len(L_attack), dtype=np.int8)
     labels_attack[len(idx_a_L1):] = 1
 
+    labels_attack = np.expand_dims(labels_attack, 1)
+    labels_profiling = np.expand_dims(labels_profiling, 1)
 
-    classifer = LDA(solver="eigen", n_components=1)
-
-    print_centered(f"============CLASSIFY DATA {L_profiling.shape} EVAL DATA {L_attack.shape}==========")
-
-    fig, (ax1, ax2) = plt.subplots(ncols=2, nrows=1, figsize=(16,9), sharey=True)
-
-    # Profiling data projection
-    L_p_transformed = classifer.fit_transform(L_profiling, labels_profiling)
-
-    Y0 = L_p_transformed[labels_profiling==0]
-    Y1 = L_p_transformed[labels_profiling==1]
-
-    p0, x0 = np.histogram(Y0, bins=100, density=True)
-    ax1.plot(x0[:-1], p0, label="class 1 LDA projection", alpha=0.75, linewidth=2)
-    p1, x1 = np.histogram(Y1, bins=100, density=True)
-    ax1.plot(x1[:-1], p1, label="class 2 LDA projection", alpha=0.75, linewidth=2)
-
-    m1 = Y0.mean()
-    m2 = Y1.mean()
-    mus = np.array([m1, m2])
-    m = (m1+m2)/2
-    p0_mx = p0.max()
-    p1_mx = p1.max()
-    ax1.hlines(y=p1_mx/2, xmin=mus.min(), xmax=mus.max(), colors="tab:red")
-    ax1.text(x=m, y=p1_mx/2, s=f"{np.abs(m1-m2):0.4f}" )
-    print_centered(f"Mean distace on L_p: {np.abs(m1-m2)}", "yellow")
-    ax1.vlines(x=m1, ymin=0, ymax=p0_mx, color="tab:grey")
-    ax1.vlines(x=m2, ymin=0, ymax=p1_mx, color="tab:grey")
-    ax1.set_title("On profiling data")
+    print("train size", L_profiling.shape)
+    print("val size", L_attack.shape)
+    # DATASET
+    train_batch = L_profiling.shape[0]//20
+    val_batch = labels_attack.shape[0]//5
+    trainset = LeakageData(L_profiling, labels_profiling)
+    traindata = DataLoader(trainset, batch_size=train_batch, num_workers=20, shuffle=True)
+    valset = LeakageData(L_attack, labels_attack)
+    print(valset[0][0].dtype, valset[0][1].dtype)
+    print(valset[0][0].shape, valset[0][1].shape)
+    valdata = DataLoader(valset, batch_size=val_batch, num_workers=10, shuffle=False)
 
 
-    # Attack data projection
-    L_a_transformed = classifer.transform(L_attack)
+    early_stop_callback = EarlyStopping_(monitor="val_loss", patience=4, mode="min")
 
-    Y0 = L_a_transformed[labels_attack==0]
-    Y1 = L_a_transformed[labels_attack==1]
+    #TRAINER SETUP
+    mlp = MLP_BIN_BCE(in_dim=L_profiling.shape[1])
+    print("indim", L_profiling.shape[1])
+    trainer = pl.Trainer(accelerator="auto", devices="auto", strategy="auto",
+                            max_epochs=200,
+                            check_val_every_n_epoch=1,
+                            callbacks=[early_stop_callback],
+                            detect_anomaly=True)
 
-    p0, x0 = np.histogram(Y0, bins=100, density=True)
-    ax2.plot(x0[:-1], p0, alpha=0.75, linewidth=2)
-    p1, x1 = np.histogram(Y1, bins=100, density=True)
-    ax2.plot(x1[:-1], p1, alpha=0.75, linewidth=2)
+    #TRAINING
+    trainer.fit(mlp, traindata, valdata)
 
-    m1 = Y0.mean()
-    m2 = Y1.mean()
-    mus = np.array([m1, m2])
-    m = (m1+m2)/2
-    p0_mx = p0.max()
-    p1_mx = p1.max()
-    ax2.hlines(y=p1_mx/2, xmin=mus.min(), xmax=mus.max(), colors="tab:red")
-    ax2.text(x=m, y=p1_mx/2, s=f"{np.abs(m1-m2):0.4f}" )
-    print_centered(f"Mean distace on L_a: {np.abs(m1-m2)}", "yellow")
-    ax2.vlines(x=m1, ymin=0, ymax=p0_mx, color="tab:grey")
-    ax2.vlines(x=m2, ymin=0, ymax=p1_mx, color="tab:grey")
-    ax2.set_title("On attack data")
+    #Transform (on attack data)
+    pred_data = DataLoader(valset, batch_size=L_attack.shape[0], num_workers=10, shuffle=False)
+    res = trainer.predict(mlp, pred_data)
 
-    handles, labels = ax1.get_legend_handles_labels()
-    fig.legend(handles, labels, loc='lower center')
-    avg_score = classifer.score(L_attack, labels_attack)
+    Y_TRANS = res[0][0].numpy(force=True)
+    Y = res[0][1].numpy(force=True)
+    PRED =  res[0][2].numpy(force=True)
+    Y = Y.squeeze()
+    PRED = PRED.squeeze()
+    print(PRED[:10])
+    PRED[PRED>0.5] = 1
+    PRED[PRED<0.5] = 0
+
+    correc_guess = np.nonzero(Y==PRED)
+    print(correc_guess)
+    correc_guess = correc_guess[0]
+    avg_score = len(correc_guess)/len(Y)
     print_centered(f"===========AVG SCORE {avg_score}============", "yellow")
-    return fig, avg_score
+
+
+    #Display transformed
+
+    Y0 = Y_TRANS[Y==0]
+    Y1 = Y_TRANS[Y==1]
+    m1 = Y0.mean()
+    m2 = Y1.mean()
+    mus = np.array([m1, m2])
+    m = (m1+m2)/2
+
+    # plt.scatter(Y0[:, 0], Y0[:, 1], label="class 1")
+    # plt.scatter(Y1[:, 0], Y1[:, 1], label="class 2")
+
+
+
+    p0, x0 = np.histogram(Y0, bins=100, density=True)
+    plt.plot(x0[:-1], p0, label="class 1 MLP projection", alpha=0.75, linewidth=2)
+    p1, x1 = np.histogram(Y1, bins=100, density=True)
+    plt.plot(x1[:-1], p1, label="class 2 MLP projection", alpha=0.75, linewidth=2)
+
+    p0_mx = p0.max()
+    p1_mx = p1.max()
+
+    plt.hlines(y=p1_mx/2, xmin=mus.min(), xmax=mus.max(), colors="tab:red")
+    plt.text(x=m, y=p1_mx/2, s=f"{np.abs(m1-m2):0.4f}" )
+    print_centered(f"Mean distace: {np.abs(m1-m2)}")
+    plt.vlines(x=m1, ymin=0, ymax=p0_mx, color="tab:grey")
+    plt.vlines(x=m2, ymin=0, ymax=p1_mx, color="tab:grey")
+
+    plt.hlines(y=p1_mx/2, xmin=mus.min(), xmax=mus.max(), colors="tab:red")
+    plt.text(x=m, y=p1_mx/2, s=f"{np.abs(m1-m2):0.4f}" )
+    return avg_score
+
+
+
 def attack_sr(n_profiling, n_shares, combif, n_coeff=128, wing="right", n_poi=1, model=ID, c_i=0, rep=1):
 
     m_decs = "ID" if model is ID else "HW"
@@ -330,39 +233,53 @@ def attack_sr(n_profiling, n_shares, combif, n_coeff=128, wing="right", n_poi=1,
     for shi in range(n_shares):
         os.system(f"cp {LH1.dir_path}/POI_on_share_{n_poi}_poi_{shi}_ID_None_noise_False_fullp.npy {LH2.dir_path}/POI_on_share_{n_poi}_poi_{shi}_ID_None_noise_False_fullp.npy")
     L2 = combine_leakage_full(d2, combif, n_poi=n_poi, f_desc=None, add_noise=False, model=ID)
-    print_centered(f"=====Combines leakage share {L1.shape} {L2.shape}===========")
 
+    print_centered(f"=====Combines leakage share {L1.shape} {L2.shape}===========")
     if n_coeff == 1:
         L1 = L1[:, np.arange(c_i*n_poi, c_i*n_poi+n_poi)]
         L2 = L2[:, np.arange(c_i*n_poi, c_i*n_poi+n_poi)]
     else:
         poi_idx = L1.shape[1]
+        print(L1.shape)
+        print("wing", wing)
         if wing=="left":
-            L1 = L1[:, np.arange(poi_idx//2)]
-            L2 = L2[:, np.arange(poi_idx//2)]
+            L1 = L1[:, np.arange(poi_idx//2)].copy()
+            L2 = L2[:, np.arange(poi_idx//2)].copy()
+            print_centered(f"+====Combines leakage share {L1.shape} {L2.shape}===========")
         elif wing=="right":
-            L1 = L1[:, np.arange(poi_idx//2, poi_idx)]
-            L2 = L2[:, np.arange(poi_idx//2, poi_idx)]
-    print_centered(f"==========={combif} POI {n_poi} k={rep}==============", "yellow")
+            L1 = L1[:, np.arange(poi_idx//2, poi_idx)].copy()
+            L2 = L2[:, np.arange(poi_idx//2, poi_idx)].copy()
+            print_centered(f"-====Combines leakage share {L1.shape} {L2.shape}===========")
+    print_centered(f"=====Combines leakage share {L1.shape} {L2.shape}===========")
+
+
+        # c_list = np.random.choice(KYBER_N, n_coeff, replace=False)
+        # for ci in c_list:
+        #     poi_c =
+    #     # c_list.sort()
+    #     c_list = np.arange()
     if rep == 2:
         L1_ = np.concatenate((L1, L2), axis=1)
         L2_ = np.concatenate((L2, L1), axis=1)
     elif rep == 3:
-        L1_ = np.concatenate((L1, L2, L1), axis=1)
-        L2_ = np.concatenate((L2, L1, L2), axis=1)
+        L1_ = np.concatenate((L1, L1, L1), axis=1)
+        L2_ = np.concatenate((L2, L2, L2), axis=1)
     else:
         L1_ = L1.copy()
         L2_ = L2.copy()
+    L1_ = L1_.astype(np.float32)
+    L2_ = L2_.astype(np.float32)
+    print_centered(f"==========={combif} POI {n_poi} k={rep}==============", "yellow")
+    plt.figure(figsize=(12, 12))
+    acc = classify_(d1, d2, L1_, L2_, n_profiling)
 
-    print_centered(f"==========={combif} POI {n_poi}==============", "yellow")
-    fig, acc = classify_(d1, d2, L1_, L2_, n_profiling)
-    fig.suptitle(f"{n_shares} shares #coeff={n_coeff} #POI={n_poi} combif={combif} acc={acc:0.4f} k={rep}")
+
+    plt.title(f"{n_shares} shares #coeff={n_coeff} #POI={n_poi} combif={combif} acc={acc:0.4f} k={rep}")
 
     if rep <= 1:
-        plt.savefig(f"pic/LDA_{n_shares}_shares_{wing}_wing_{n_poi}_poi_{combif}.png")
+        plt.savefig(f"pic/MLP_{n_shares}_shares_{wing}_wing_{n_poi}_poi_{combif}.png")
     else:
-        plt.savefig(f"pic/LDA_{n_shares}_shares_{wing}_wing_{n_poi}_poi_{combif}_k={rep}.png")
-    # plt.show()
+        plt.savefig(f"pic/MLP_{n_shares}_shares_{wing}_wing_{n_poi}_poi_{combif}_k={rep}.png")
 
 
 
@@ -634,6 +551,13 @@ def poi_check(d_name, wing, share_i, n_poi):
 
 
 if __name__=="__main__":
+    # attack_sr(n_profiling=40000, n_shares=2, combif="abs_diff", n_coeff=256, wing="both", n_poi=20, model=ID, c_i=0)
+    # attack_sr(n_profiling=40000, n_shares=2, combif="norm_prod", n_coeff=256, wing="both", n_poi=20, model=ID, c_i=0)
+    # attack_sr(n_profiling=80000, n_shares=3, combif="abs_diff", n_coeff=256, wing="both", n_poi=100, model=ID, c_i=0)
+    # attack_sr(n_profiling=80000, n_shares=3, combif="norm_prod", n_coeff=256, wing="both", n_poi=100, model=ID, c_i=0)
+    # attack_sr(n_profiling=80000, n_shares=3, combif="sum", n_coeff=256, wing="both", n_poi=100, model=ID, c_i=0)
+    # attack_sr(n_profiling=80000, n_shares=3, combif="sum", n_coeff=256, wing="both", n_poi=20, model=ID, c_i=0)
+    # attack_sr(n_profiling=80000, n_shares=3, combif="sum", n_coeff=256, wing="both", n_poi=50, model=ID, c_i=0)
     # poi_check(d_name="021123_1335", wing="left", share_i=0, n_poi=20)
     # noise = 0
     # combifs = ["prod", "norm_prod"]
@@ -642,7 +566,14 @@ if __name__=="__main__":
     #     run_onM(n_profiling=40000, noise=noise, n_shares=6, combif=combif, model=ID)
     # run_onM(n_profiling=40000, noise=500, n_shares=2, n_coeff=128, combif="sum", model=ID)
     # run_onM(n_profiling=40000, noise=0, n_shares=2, n_coeff=32, combif="sum", model=ID)
-
+    N_POI = [50]
+    Fs = ["norm_prod", "abs_diff", "sum"]
+    for n_poi in N_POI:
+        for combif in Fs:
+            attack_sr(n_profiling=70000, n_shares=4, combif=combif, wing="both", n_coeff=256, n_poi=n_poi, model=ID, c_i=1, rep=1)
+            attack_sr(n_profiling=70000, n_shares=4, combif=combif, wing="both", n_coeff=256, n_poi=n_poi, model=ID, c_i=1, rep=2)
+            attack_sr(n_profiling=70000, n_shares=5, combif=combif, wing="both", n_coeff=256, n_poi=n_poi, model=ID, c_i=1, rep=1)
+            attack_sr(n_profiling=70000, n_shares=5, combif=combif, wing="both", n_coeff=256, n_poi=n_poi, model=ID, c_i=1, rep=2)
 
     # run_onM(noise=noise, n_shares=2, combif=combif)
     # run_onM(noise=noise, n_shares=3, combif=combif)
@@ -677,22 +608,8 @@ if __name__=="__main__":
     #     attack_sr(n_profiling=40000, n_shares=3, combif=combif, n_coeff=128, n_poi=50, model=ID, c_i=0)
     # attack_sr(n_profiling=50000, n_shares=2, combif="norm_prod", n_coeff=256, n_poi=10, model=ID, c_i=1)
     # attack_sr(n_profiling=50000, n_shares=2, combif="abs_diff", n_coeff=256, n_poi=51, model=ID, c_i=14)
-    N_POI = [50]
-    Fs = ["norm_prod", "abs_diff", "sum"]
-    for n_poi in N_POI:
-        for combif in Fs:
-            attack_sr(n_profiling=70000, n_shares=3, combif=combif, wing="both", n_coeff=256, n_poi=n_poi, model=ID, c_i=1, rep=1)
-            attack_sr(n_profiling=70000, n_shares=3, combif=combif, wing="both", n_coeff=256, n_poi=n_poi, model=ID, c_i=1, rep=2)
-            # attack_sr(n_profiling=70000, n_shares=5, combif=combif, wing="both", n_coeff=256, n_poi=n_poi, model=ID, c_i=1, rep=1)
-            # attack_sr(n_profiling=70000, n_shares=5, combif=combif, wing="both", n_coeff=256, n_poi=n_poi, model=ID, c_i=1, rep=2)
-    # attack_sr(n_profiling=80000, n_shares=3, combif="abs_diff", wing="both", n_coeff=256, n_poi=20, model=ID, c_i=14)
-    # attack_sr(n_profiling=80000, n_shares=3, combif="sum", wing="both", n_coeff=256, n_poi=20, model=ID, c_i=14)
-    # attack_sr(n_profiling=80000, n_shares=3, combif="norm_prod", wing="both", n_coeff=256, n_poi=50, model=ID, c_i=1)
-    # attack_sr(n_profiling=80000, n_shares=3, combif="abs_diff", wing="both", n_coeff=256, n_poi=50, model=ID, c_i=14)
-    # attack_sr(n_profiling=80000, n_shares=3, combif="sum", wing="both", n_coeff=256, n_poi=50, model=ID, c_i=14)
-    # attack_sr(n_profiling=80000, n_shares=3, combif="norm_prod", wing="both", n_coeff=256, n_poi=100, model=ID, c_i=1)
-    # attack_sr(n_profiling=80000, n_shares=3, combif="abs_diff", wing="both", n_coeff=256, n_poi=100, model=ID, c_i=14)
-    # attack_sr(n_profiling=80000, n_shares=3, combif="sum", wing="both", n_coeff=256, n_poi=100, model=ID, c_i=14)
+
+    # attack_sr(n_profiling=40000, n_shares=2, combif="abs_diff", wing="both", n_coeff=256, n_poi=20, model=ID, c_i=14)
     # attack_sr(n_profiling=40000, n_shares=2, combif="sum", n_coeff=1, n_poi=10, model=ID, c_i=15)
     # attack_sr(n_profiling=40000, n_shares=2, combif="sum", n_coeff=1, n_poi=10, model=ID, c_i=16)
         # run_onM(n_profiling=50000, noise=noise, n_shares=2, n_coeff=2, combif=combif, model=ID)
